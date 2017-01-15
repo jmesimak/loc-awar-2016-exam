@@ -2,6 +2,9 @@ const fs = require('fs')
 const _ = require('lodash')
 const tokml = require('tokml')
 
+const velocityPrune = require('./velocity-prune')
+const poi = require('./poi')
+
 const spatialData = './spatial-analysis-data/buenosaires.csv'
 
 function filterInaccurate(row) {
@@ -21,6 +24,19 @@ function convertToGeoJSONObjects(row) {
     "geometry": {
       "type": "Point",
       "coordinates": [row[0], row[1]]
+    },
+    "properties": {
+      "name": ""
+    }
+  }
+}
+
+function convertToGeoJSONObjectsByObj(o) {
+  return {
+    "type": "Feature",
+    "geometry": {
+      "type": "Point",
+      "coordinates": [o.latitude, o.longitude]
     },
     "properties": {
       "name": ""
@@ -59,14 +75,19 @@ function readData() {
       const allCoordinatesRaw = transformDataToCoordinates(data)
       const filteredCoordinatesRaw = allCoordinatesRaw.filter(filterInaccurate)
 
+      const velocityPrunedCoordinates = velocityPrune(filteredCoordinatesRaw.map(rawCoordinatesToLocations))
+
       const filteredCoordinates = filteredCoordinatesRaw.map(convertToGeoJSONObjects)
       const allCoordinates = allCoordinatesRaw.map(convertToGeoJSONObjects)
+      const velocityCoordinates = velocityPrunedCoordinates.map(convertToGeoJSONObjectsByObj)
 
       const geojsonAll = constructGeoJSON(allCoordinates)
       const geojsonFiltered = constructGeoJSON(filteredCoordinates)
+      const geojsonVelocityPruned = constructGeoJSON(velocityCoordinates)
 
       const kmlAll = tokml(geojsonAll)
       const kmlFiltered = tokml(geojsonFiltered)
+      const kmlVelocityPruned = tokml(geojsonVelocityPruned)
 
       fs.writeFile('spatial-points-all.kml', kmlAll, (err) => {
         if (!err) console.log("Wrote all points.kml");
@@ -76,6 +97,9 @@ function readData() {
         if (!err) console.log("Wrote filtered points.kml");
       });
 
+      fs.writeFile('velocity-pruned-points.kml', kmlVelocityPruned, (err) => {
+        if (!err) console.log("Wrote velocity pruned points");
+      });
 
       formClusters(filteredCoordinatesRaw)
     })
@@ -85,7 +109,10 @@ function readData() {
 function rawCoordinatesToLocations(coordinates) {
   return {
     latitude: coordinates[0],
-    longitude: coordinates[1]
+    longitude: coordinates[1],
+    timestamp: new Date(coordinates[2] * 1000),
+    satellites: coordinates[3],
+    hdop: coordinates[4]
   }
 }
 
@@ -145,8 +172,6 @@ function formClusters(rawCoordinates) {
     if (!containsClusterWithinCentroidThreshold(finalClusters, cluster.centroid, clusterCentroidDistanceThreshold)) finalClusters.push(cluster)
   })
 
-  console.log(finalClusters.length)
-
   const placeGeoJsons = finalClusters
     .map((cluster) => [cluster.centroid.latitude, cluster.centroid.longitude])
     .map(convertToGeoJSONObjects)
@@ -157,6 +182,8 @@ function formClusters(rawCoordinates) {
   fs.writeFile('pruned-cluster-centroids.kml', tokml(placesGeoJson), (err) => {
     if (!err) console.log("Wrote filtered pruned-cluster-centroids.kml");
   });
+
+  poi.linkClustersToLocations(finalClusters)
 
 }
 
